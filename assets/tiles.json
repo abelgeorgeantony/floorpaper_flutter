@@ -1,0 +1,149 @@
+[
+  {
+    "id": "karakusa_vine_1",
+    "name": "Karakusa Vine 1",
+    "asset": "assets/tiles/karakusa_vine_1.png",
+    "width": 100,
+    "height": 100
+  },
+  {
+    "id": "karakusa_vine_2",
+    "name": "Karakusa Vine 2",
+    "asset": "assets/tiles/karakusa_vine_2.png",
+    "width": 100,
+    "height": 100
+  },
+  {
+    "id": "karakusa_vine_3",
+    "name": "Karakusa Vine 3",
+    "asset": "assets/tiles/karakusa_vine_3.png",
+    "width": 100,
+    "height": 100
+  },
+  {
+    "id": "lattice",
+    "name": "Lattice",
+    "asset": "assets/tiles/lattice.png",
+    "width": 108,
+    "height": 75
+  },
+  {
+    "id": "luminous_ivy",
+    "name": "Luminous Ivy",
+    "asset": "assets/tiles/luminous_ivy.png",
+    "width": 960,
+    "height": 640
+  },
+  {
+    "id": "mars_coffee_contrast",
+    "name": "Mars Coffee Contrast",
+    "asset": "assets/tiles/mars_coffee_contrast.png",
+    "width": 960,
+    "height": 540
+  },
+  {
+    "id": "rain",
+    "name": "Rain",
+    "asset": "assets/tiles/rain.png",
+    "width": 200,
+    "height": 200
+  },
+  {
+    "id": "sr_wheel_1",
+    "name": "Sr Wheel 1",
+    "asset": "assets/tiles/sr_wheel_1.png",
+    "width": 400,
+    "height": 400
+  },
+  {
+    "id": "sr_wheel_2",
+    "name": "Sr Wheel 2",
+    "asset": "assets/tiles/sr_wheel_2.png",
+    "width": 400,
+    "height": 400
+  },
+  {
+    "id": "stained_glass",
+    "name": "Stained Glass",
+    "asset": "assets/tiles/stained_glass.png",
+    "width": 512,
+    "height": 512
+  },
+  {
+    "id": "star_flower",
+    "name": "Star Flower",
+    "asset": "assets/tiles/star_flower.png",
+    "width": 208,
+    "height": 208
+  },
+  {
+    "id": "stone_wall_1",
+    "name": "Stone Wall 1",
+    "asset": "assets/tiles/stone_wall_1.png",
+    "width": 600,
+    "height": 600
+  },
+  {
+    "id": "stone_wall_2",
+    "name": "Stone Wall 2",
+    "asset": "assets/tiles/stone_wall_2.png",
+    "width": 600,
+    "height": 600
+  },
+  {
+    "id": "stone_wall_3",
+    "name": "Stone Wall 3",
+    "asset": "assets/tiles/stone_wall_3.png",
+    "width": 600,
+    "height": 600
+  },
+  {
+    "id": "stone_wall_4",
+    "name": "Stone Wall 4",
+    "asset": "assets/tiles/stone_wall_4.png",
+    "width": 600,
+    "height": 600
+  },
+  {
+    "id": "stripes_1",
+    "name": "Stripes 1",
+    "asset": "assets/tiles/stripes_1.png",
+    "width": 310,
+    "height": 310
+  },
+  {
+    "id": "stripes_2",
+    "name": "Stripes 2",
+    "asset": "assets/tiles/stripes_2.png",
+    "width": 310,
+    "height": 310
+  },
+  {
+    "id": "stripes_3",
+    "name": "Stripes 3",
+    "asset": "assets/tiles/stripes_3.png",
+    "width": 310,
+    "height": 310
+  },
+  {
+    "id": "stripes_4",
+    "name": "Stripes 4",
+    "asset": "assets/tiles/stripes_4.png",
+    "width": 310,
+    "height": 310
+  },
+  {
+    "id": "sun",
+    "name": "Sun",
+    "asset": "assets/tiles/sun.png",
+    "width": 256,
+    "height": 256
+  },
+  {
+    "id": "sun_microsystems",
+    "name": "Sun Microsystems",
+    "asset": "assets/tiles/sun_microsystems.jpg",
+    "width": 500,
+    "height": 500
+  }
+]

@@ -1,0 +1,1 @@
+enum WallpaperMode { singlePage, allPages }
