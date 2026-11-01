@@ -14,6 +14,12 @@ class RemotePack {
         sizeBytes: json['sizeBytes'] as int? ?? 0,
         sha256: json['sha256'] as String? ?? '',
       );
+
+  Map<String, dynamic> toJson() => {
+        'file': file,
+        'sizeBytes': sizeBytes,
+        'sha256': sha256,
+      };
 }
 
 class RemoteCategory {
@@ -37,6 +43,13 @@ class RemoteCategory {
             ? null
             : RemotePack.fromJson(json['pack'] as Map<String, dynamic>),
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'count': count,
+        'pack': pack?.toJson(),
+      };
 }
 
 class RemoteTile {
@@ -73,6 +86,18 @@ class RemoteTile {
         sizeBytes: json['sizeBytes'] as int? ?? 0,
         sha256: json['sha256'] as String? ?? '',
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'category': category,
+        'file': file,
+        'thumbnail': thumbnail,
+        'width': width,
+        'height': height,
+        'sizeBytes': sizeBytes,
+        'sha256': sha256,
+      };
 }
 
 class RemoteCatalog {
@@ -107,6 +132,14 @@ class RemoteCatalog {
             .map((t) => RemoteTile.fromJson(t as Map<String, dynamic>))
             .toList(),
       );
+
+  Map<String, dynamic> toJson() => {
+        'schemaVersion': schemaVersion,
+        'baseUrl': baseUrl,
+        'packsBaseUrl': packsBaseUrl,
+        'categories': categories.map((c) => c.toJson()).toList(),
+        'tiles': tiles.map((t) => t.toJson()).toList(),
+      };
 
   Uri fileUrl(RemoteTile tile) => Uri.parse('$baseUrl${tile.file}');
 

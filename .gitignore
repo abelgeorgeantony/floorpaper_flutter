@@ -84,6 +84,8 @@ pyscripts/mosaic_out/
 venv
 floorpaper*.md
 floorpaper*.txt
+tree.txt
+tree.md
 # Never share signing secrets!
 android/key.properties
 **/*.jks

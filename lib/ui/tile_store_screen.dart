@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../models/remote_catalog.dart';
@@ -15,11 +16,19 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
 
   late Future<RemoteCatalog> _catalogFuture = _loadCatalog();
   Set<String> _downloaded = {};
-  final Map<String, double> _progress = {}; // key: tile id, or "pack:<category id>"
-  String? _selectedCategory; // null = all categories
+  final Map<String, double> _progress = {};
+  String? _selectedCategory;
+  String _query = '';
 
-  Future<RemoteCatalog> _loadCatalog() async {
-    final catalog = await _repository.fetchCatalog();
+  @override
+  void dispose() {
+    _repository.dispose();
+    super.dispose();
+  }
+
+  Future<RemoteCatalog> _loadCatalog({bool forceRefresh = false}) async {
+    final catalog =
+        await _repository.fetchCatalog(forceRefresh: forceRefresh);
     _downloaded = await _repository.store.downloadedIds();
     return catalog;
   }
@@ -27,12 +36,15 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
   void _refresh() {
     setState(() {
       _selectedCategory = null;
-      _catalogFuture = _loadCatalog();
+      _query = '';
+      _progress.clear();
+      _catalogFuture = _loadCatalog(forceRefresh: true);
     });
   }
 
   void _toast(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _reportProgress(String key, double progress) {
@@ -67,7 +79,7 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
     final key = 'pack:${category.id}';
     setState(() => _progress[key] = 0);
     try {
-      final count = await _repository.downloadPack(
+      final result = await _repository.downloadPack(
         catalog,
         category,
         onProgress: (p) => _reportProgress(key, p),
@@ -75,7 +87,14 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
       _downloaded = await _repository.store.downloadedIds();
       if (!mounted) return;
       setState(() => _progress.remove(key));
-      _toast('$count tiles added from ${category.name}.');
+
+      if (result.failed.isEmpty) {
+        _toast('${result.saved} tiles added from ${category.name}.');
+      } else if (result.saved == 0) {
+        _toast('Download failed for ${result.failed.length} tiles. Try again.');
+      } else {
+        _toast('${result.saved} added, ${result.failed.length} failed.');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _progress.remove(key));
@@ -94,6 +113,15 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  List<RemoteTile> _filterTiles(RemoteCatalog catalog) {
+    final selected = _selectedCategory;
+    final base =
+        selected == null ? catalog.tiles : catalog.tilesIn(selected);
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return base;
+    return base.where((t) => t.name.toLowerCase().contains(q)).toList();
   }
 
   @override
@@ -122,8 +150,10 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('${snapshot.error}', textAlign: TextAlign.center),
+                    const Icon(Icons.cloud_off, size: 48),
                     const SizedBox(height: 12),
+                    Text('${snapshot.error}', textAlign: TextAlign.center),
+                    const SizedBox(height: 16),
                     FilledButton.icon(
                       onPressed: _refresh,
                       icon: const Icon(Icons.refresh),
@@ -142,11 +172,21 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
 
   Widget _buildCatalog(RemoteCatalog catalog) {
     final selected = _selectedCategory;
-    final tiles = selected == null ? catalog.tiles : catalog.tilesIn(selected);
+    final tiles = _filterTiles(catalog);
     final category = selected == null ? null : catalog.categoryById(selected);
 
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: TextField(
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Search tiles',
+            ),
+            onChanged: (v) => setState(() => _query = v),
+          ),
+        ),
         if (catalog.categories.isNotEmpty)
           SizedBox(
             height: 56,
@@ -159,14 +199,15 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
                   child: FilterChip(
                     label: const Text('All'),
                     selected: selected == null,
-                    onSelected: (_) => setState(() => _selectedCategory = null),
+                    onSelected: (_) =>
+                        setState(() => _selectedCategory = null),
                   ),
                 ),
                 for (final c in catalog.categories)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: FilterChip(
-                      label: Text(c.name),
+                      label: Text('${c.name} (${catalog.tilesIn(c.id).length})'),
                       selected: selected == c.id,
                       onSelected: (_) =>
                           setState(() => _selectedCategory = c.id),
@@ -178,10 +219,18 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
         if (category != null) _packBar(catalog, category),
         Expanded(
           child: tiles.isEmpty
-              ? const Center(child: Text('No tiles in this category.'))
+              ? Center(
+                  child: Text(
+                    _query.isNotEmpty
+                        ? 'No tiles match "${_query.trim()}".'
+                        : 'No tiles in this category.',
+                    textAlign: TextAlign.center,
+                  ),
+                )
               : GridView.builder(
                   padding: const EdgeInsets.all(8),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 3,
                     mainAxisSpacing: 8,
                     crossAxisSpacing: 8,
@@ -201,7 +250,8 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
     if (pack == null) return const SizedBox.shrink();
 
     final tiles = catalog.tilesIn(category.id);
-    final missing = tiles.where((t) => !_downloaded.contains(t.id)).length;
+    final missing =
+        tiles.where((t) => !_downloaded.contains(t.id)).length;
     final progress = _progress['pack:${category.id}'];
 
     final Widget action;
@@ -225,8 +275,10 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
     }
 
     return Card(
-      shape: const RoundedRectangleBorder(),
-      margin: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
         child: Row(
@@ -255,7 +307,9 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
     final thumbnail = catalog.thumbnailUrl(tile);
 
     return Card(
-      shape: const RoundedRectangleBorder(),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -266,13 +320,13 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
                     color: Colors.white10,
                     child: const Icon(Icons.image_outlined),
                   )
-                : Image.network(
-                    thumbnail.toString(),
+                : CachedNetworkImage(
+                    imageUrl: thumbnail.toString(),
                     fit: BoxFit.cover,
-                    cacheWidth: 300,
-                    loadingBuilder: (context, child, chunk) =>
-                        chunk == null ? child : Container(color: Colors.white10),
-                    errorBuilder: (context, error, stack) => Container(
+                    memCacheWidth: 300,
+                    placeholder: (_, __) =>
+                        Container(color: Colors.white10),
+                    errorWidget: (_, __, ___) => Container(
                       color: Colors.white10,
                       child: const Icon(Icons.broken_image_outlined),
                     ),
@@ -330,7 +384,8 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Icon(Icons.check_circle_outline, size: 18, color: Colors.green),
+            const Icon(Icons.check_circle_outline,
+                size: 18, color: Colors.green),
             IconButton(
               visualDensity: VisualDensity.compact,
               tooltip: 'Delete download',

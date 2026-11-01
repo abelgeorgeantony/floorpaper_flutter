@@ -12,5 +12,9 @@ class ScreenInfo {
   });
 
   /// How many screens wide Android's suggested wallpaper is.
+  ///
+  /// TODO(scrolling-pages): Currently unused — the preview screen no longer
+  /// suggests a page count because multi-page scrolling is on hold. Restore
+  /// callers when the feature returns.
   int get suggestedPages => (suggestedWidth / screenWidth).round().clamp(1, 8);
 }
