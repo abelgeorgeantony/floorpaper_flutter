@@ -2,7 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../models/remote_catalog.dart';
-import '../services/remote_tile_repository.dart';
+import '../services/download_manager.dart';
 
 class TileStoreScreen extends StatefulWidget {
   const TileStoreScreen({super.key});
@@ -12,24 +12,64 @@ class TileStoreScreen extends StatefulWidget {
 }
 
 class _TileStoreScreenState extends State<TileStoreScreen> {
-  final RemoteTileRepository _repository = RemoteTileRepository();
+  final DownloadManager _manager = DownloadManager.instance;
 
   late Future<RemoteCatalog> _catalogFuture = _loadCatalog();
-  Set<String> _downloaded = {};
-  final Map<String, double> _progress = {};
   String? _selectedCategory;
   String _query = '';
 
+  /// Tasks already reported via a snackbar. Prevents re-showing the same
+  /// completion message on every manager notification, and ensures a toast
+  /// is surfaced when the user returns to the store after a background
+  /// download completed.
+  final Set<String> _reportedTasks = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _manager.addListener(_onManagerChanged);
+    // Catch any tasks that completed while this screen was off-stack.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onManagerChanged());
+  }
+
   @override
   void dispose() {
-    _repository.dispose();
+    _manager.removeListener(_onManagerChanged);
+    // NOTE: deliberately do NOT dispose _manager.repository — that lives for
+    // the whole app lifetime so background downloads survive this screen.
     super.dispose();
+  }
+
+  void _onManagerChanged() {
+    if (!mounted) return;
+
+    setState(() {});
+
+    // Report finished tasks via snackbar, then clear them so the UI settles.
+    for (final task in _manager.tasks.values.toList()) {
+      if (task.status == DownloadStatus.running) continue;
+      if (_reportedTasks.contains(task.key)) continue;
+      _reportedTasks.add(task.key);
+
+      final key = task.key;
+      final message = task.message ??
+          (task.status == DownloadStatus.success
+              ? '${task.label} downloaded.'
+              : 'Could not download ${task.label}.');
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _reportedTasks.remove(key);
+        _toast(message);
+        _manager.clearTask(key);
+      });
+    }
   }
 
   Future<RemoteCatalog> _loadCatalog({bool forceRefresh = false}) async {
     final catalog =
-        await _repository.fetchCatalog(forceRefresh: forceRefresh);
-    _downloaded = await _repository.store.downloadedIds();
+        await _manager.repository.fetchCatalog(forceRefresh: forceRefresh);
+    await _manager.refreshDownloadedIds();
     return catalog;
   }
 
@@ -37,7 +77,6 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
     setState(() {
       _selectedCategory = null;
       _query = '';
-      _progress.clear();
       _catalogFuture = _loadCatalog(forceRefresh: true);
     });
   }
@@ -47,65 +86,18 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _reportProgress(String key, double progress) {
-    if (!mounted) return;
-    final last = _progress[key] ?? 0;
-    if (progress >= 1 || progress - last >= 0.02) {
-      setState(() => _progress[key] = progress);
-    }
+  void _download(RemoteCatalog catalog, RemoteTile tile) {
+    // Fire-and-forget: the manager handles progress + completion.
+    _manager.downloadTile(catalog, tile);
   }
 
-  Future<void> _download(RemoteCatalog catalog, RemoteTile tile) async {
-    setState(() => _progress[tile.id] = 0);
-    try {
-      await _repository.downloadTile(
-        catalog,
-        tile,
-        onProgress: (p) => _reportProgress(tile.id, p),
-      );
-      _downloaded = await _repository.store.downloadedIds();
-      if (!mounted) return;
-      setState(() => _progress.remove(tile.id));
-      _toast('${tile.name} downloaded.');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _progress.remove(tile.id));
-      _toast('Could not download ${tile.name}: $e');
-    }
-  }
-
-  Future<void> _downloadPack(
-      RemoteCatalog catalog, RemoteCategory category) async {
-    final key = 'pack:${category.id}';
-    setState(() => _progress[key] = 0);
-    try {
-      final result = await _repository.downloadPack(
-        catalog,
-        category,
-        onProgress: (p) => _reportProgress(key, p),
-      );
-      _downloaded = await _repository.store.downloadedIds();
-      if (!mounted) return;
-      setState(() => _progress.remove(key));
-
-      if (result.failed.isEmpty) {
-        _toast('${result.saved} tiles added from ${category.name}.');
-      } else if (result.saved == 0) {
-        _toast('Download failed for ${result.failed.length} tiles. Try again.');
-      } else {
-        _toast('${result.saved} added, ${result.failed.length} failed.');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _progress.remove(key));
-      _toast('Could not download ${category.name}: $e');
-    }
+  void _downloadPack(RemoteCatalog catalog, RemoteCategory category) {
+    _manager.downloadPack(catalog, category);
   }
 
   Future<void> _delete(RemoteTile tile) async {
-    await _repository.store.delete(tile.id);
-    if (!mounted) return;
-    setState(() => _downloaded.remove(tile.id));
+    await _manager.repository.store.delete(tile.id);
+    await _manager.refreshDownloadedIds();
   }
 
   String _formatSize(int bytes) {
@@ -251,17 +243,17 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
 
     final tiles = catalog.tilesIn(category.id);
     final missing =
-        tiles.where((t) => !_downloaded.contains(t.id)).length;
-    final progress = _progress['pack:${category.id}'];
+        tiles.where((t) => !_manager.isDownloaded(t.id)).length;
+    final task = _manager.taskFor('pack:${category.id}');
 
     final Widget action;
-    if (progress != null) {
+    if (task != null && task.status == DownloadStatus.running) {
       action = SizedBox(
         width: 24,
         height: 24,
         child: CircularProgressIndicator(
           strokeWidth: 2,
-          value: progress > 0 ? progress : null,
+          value: task.progress > 0 ? task.progress : null,
         ),
       );
     } else if (missing == 0) {
@@ -360,9 +352,9 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
   }
 
   Widget _buildAction(RemoteCatalog catalog, RemoteTile tile) {
-    final progress = _progress[tile.id];
+    final task = _manager.taskFor(tile.id);
 
-    if (progress != null) {
+    if (task != null && task.status == DownloadStatus.running) {
       return SizedBox(
         height: 36,
         child: Center(
@@ -371,14 +363,14 @@ class _TileStoreScreenState extends State<TileStoreScreen> {
             height: 20,
             child: CircularProgressIndicator(
               strokeWidth: 2,
-              value: progress > 0 ? progress : null,
+              value: task.progress > 0 ? task.progress : null,
             ),
           ),
         ),
       );
     }
 
-    if (_downloaded.contains(tile.id)) {
+    if (_manager.isDownloaded(tile.id)) {
       return SizedBox(
         height: 36,
         child: Row(

@@ -18,7 +18,6 @@ import '../services/tiler.dart';
 import '../services/wallpaper_service.dart';
 import '../utils/image_utils.dart';
 import 'widgets/background_color_picker.dart';
-import 'widgets/rotation_control.dart';
 
 // -----------------------------------------------------------------------------
 // TODO(scrolling-pages): The multi-page / "Enable scrolling" wallpaper mode
@@ -121,7 +120,7 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
   double _offsetY = 0.0;
 
   // Tile rotation in whole degrees, range [-_maxRotation, _maxRotation].
-  // Adjusted by the rotation slider / text field (see RotationControl).
+  // Adjusted by the rotation slider / +/- buttons.
   int _rotationDegrees = 0;
 
   // Debounced, pre-rotated version of `_sourceImage`. When non-null, the
@@ -134,6 +133,12 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
   bool _hudHidden = false;
 
   bool get _hasOffset => _offsetX.abs() > 0.001 || _offsetY.abs() > 0.001;
+
+  /// Columns value to reset to when the user taps the Columns "Reset" button.
+  /// Reflects the value the editor was *opened* with (saved wallpaper state),
+  /// falling back to the default 8 for a brand-new preview.
+  int get _defaultColumns => widget.initialColumns ?? 8;
+  bool get _hasColumnsChanged => _columns != _defaultColumns;
 
   @override
   void initState() {
@@ -217,6 +222,12 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
     if (value < _minColumns || value > _maxColumns) return;
     if (value == _columns) return;
     setState(() => _columns = value);
+  }
+
+  void _resetColumns() {
+    if (!_hasColumnsChanged) return;
+    HapticFeedback.selectionClick();
+    _onColumnsChanged(_defaultColumns);
   }
 
   void _onBackgroundChanged(Color color) {
@@ -701,7 +712,7 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Text(
-              'Hold down on the preview to hide controls/HUD',
+              'Hold down anywhere on the preview to hide HUD',
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -721,22 +732,23 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
           // multi-page feature is reimplemented.
 
           // Columns (zoom) ----------------------------------------------------
+          // Value label is centered in the row; the "Reset" button on the
+          // right matches the drag-preview reset button's style.
           _controlLabelRow(
             label: 'Columns',
             value: '$_columns',
+            onReset: _hasColumnsChanged ? _resetColumns : null,
           ),
           _columnsSlider(),
 
           // Rotation (tile pattern angle) -------------------------------------
-          const SizedBox(height: 4),
-          RotationControl(
-            value: _rotationDegrees,
-            onChanged: _onRotationChanged,
-            onReset: _resetRotation,
-            min: -_maxRotation,
-            max: _maxRotation,
-            divisions: _rotationDivisions,
+          const SizedBox(height: 8),
+          _controlLabelRow(
+            label: 'Rotation',
+            value: '$_rotationDegrees°',
+            onReset: _rotationDegrees != 0 ? _resetRotation : null,
           ),
+          _rotationSlider(),
 
           // Alignment hint ----------------------------------------------------
           // A fixed-height row: the Reset button is always part of the layout
@@ -860,48 +872,63 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
     );
   }
 
-  /// A read-only label/value pair. Never editable — this is the only "counter"
-  /// shown to the user for zoom and page count.
+  /// A read-only label / value / reset row.
+  ///
+  /// Layout is a 1 : fixed : 1 grid — two equal Expanded slots on either side
+  /// of the value badge — so the badge is *exactly* centered in the row
+  /// regardless of how wide the label or the Reset button text is.
+  ///
+  /// The Reset slot is always laid out (Visibility + maintainSize), so the
+  /// panel height never jumps when reset availability changes.
   Widget _controlLabelRow({
     required String label,
     required String value,
-    bool highlighted = false,
+    VoidCallback? onReset,
   }) {
     final theme = Theme.of(context);
-
-    final badgeBg = highlighted
-        ? theme.colorScheme.primaryContainer
-        : theme.colorScheme.surfaceContainerHighest;
-    final badgeFg = highlighted
-        ? theme.colorScheme.onPrimaryContainer
-        : theme.colorScheme.onSurface;
+    final showReset = onReset != null;
 
     return Row(
       children: [
-        Text(label, style: theme.textTheme.labelMedium),
-        const Spacer(),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(label, style: theme.textTheme.labelMedium),
+          ),
+        ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
-            color: badgeBg,
+            color: theme.colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(6),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (highlighted) ...[
-                Icon(Icons.check, size: 12, color: badgeFg),
-                const SizedBox(width: 2),
-              ],
-              Text(
-                value,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: badgeFg,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [FontFeature.tabularFigures()],
+          child: Text(
+            value,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurface,
+              fontWeight: FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Visibility(
+              visible: showReset,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  minimumSize: const Size(0, 32),
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
                 ),
+                onPressed: onReset,
+                child: const Text('Reset'),
               ),
-            ],
+            ),
           ),
         ),
       ],
@@ -914,7 +941,7 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
         IconButton(
           visualDensity: VisualDensity.compact,
           tooltip: 'Fewer columns',
-          icon: const Icon(Icons.zoom_in),
+          icon: const Icon(Icons.remove),
           onPressed: _columns > _minColumns
               ? () {
                   HapticFeedback.selectionClick();
@@ -928,7 +955,6 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
             min: _minColumns.toDouble(),
             max: _maxColumns.toDouble(),
             divisions: _maxColumns - _minColumns,
-            label: '$_columns',
             semanticLabel: 'columns',
             onChanged: (v) {
               final next = v.round();
@@ -939,7 +965,7 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
         IconButton(
           visualDensity: VisualDensity.compact,
           tooltip: 'More columns',
-          icon: const Icon(Icons.zoom_out),
+          icon: const Icon(Icons.add),
           onPressed: _columns < _maxColumns
               ? () {
                   HapticFeedback.selectionClick();
@@ -951,28 +977,83 @@ class _TilePreviewScreenState extends State<TilePreviewScreen> {
     );
   }
 
+  /// Rotation slider with the same [-][slider][+] layout as Columns.
+  /// Step size matches the discrete slider divisions: 360°/8 = 45°.
+  Widget _rotationSlider() {
+    final step = (_maxRotation * 2) ~/ _rotationDivisions; // 360 / 8 = 45
+
+    return Row(
+      children: [
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Rotate counter-clockwise',
+          icon: const Icon(Icons.remove),
+          onPressed: _rotationDegrees > -_maxRotation
+              ? () {
+                  HapticFeedback.selectionClick();
+                  _onRotationChanged(_rotationDegrees - step);
+                }
+              : null,
+        ),
+        Expanded(
+          child: _plainSlider(
+            value: _rotationDegrees
+                .clamp(-_maxRotation, _maxRotation)
+                .toDouble(),
+            min: -_maxRotation.toDouble(),
+            max: _maxRotation.toDouble(),
+            divisions: _rotationDivisions,
+            semanticLabel: 'degrees',
+            onChanged: (v) {
+              final next = v.round();
+              if (next != _rotationDegrees) _onRotationChanged(next);
+            },
+          ),
+        ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Rotate clockwise',
+          icon: const Icon(Icons.add),
+          onPressed: _rotationDegrees < _maxRotation
+              ? () {
+                  HapticFeedback.selectionClick();
+                  _onRotationChanged(_rotationDegrees + step);
+                }
+              : null,
+        ),
+      ],
+    );
+  }
+
   // TODO(scrolling-pages): Restore `_pagesSlider()` here once the Pages
   // control is needed again. It was the UI for `_pages` / `_onPagesChanged`.
 
+  /// Bare slider: no tick marks and no value-indicator droplet.
+  ///
+  /// The value itself is exposed via `semanticFormatterCallback` for
+  /// screen readers, and visible to sighted users via the dedicated value
+  /// badge in [_controlLabelRow] above the slider.
   Widget _plainSlider({
     required double value,
     required double min,
     required double max,
     required int divisions,
-    required String label,
     required String semanticLabel,
     required ValueChanged<double> onChanged,
   }) {
     return SliderTheme(
       data: SliderTheme.of(context).copyWith(
         tickMarkShape: SliderTickMarkShape.noTickMark,
+        // Suppress the droplet tooltip that normally appears above the
+        // thumb while dragging. The `label` parameter is also omitted below
+        // for belt-and-braces.
+        showValueIndicator: ShowValueIndicator.never,
       ),
       child: Slider(
         value: value,
         min: min,
         max: max,
         divisions: divisions,
-        label: label,
         semanticFormatterCallback: (v) => '${v.round()} $semanticLabel',
         onChanged: onChanged,
         onChangeEnd: (_) => HapticFeedback.selectionClick(),
@@ -1084,7 +1165,7 @@ class _PreviewPainter extends CustomPainter {
           ui.TileMode.repeated,
           ui.TileMode.repeated,
           matrix,
-          filterQuality: ui.FilterQuality.medium,
+          filterQuality: ui.FilterQuality.high,
         ),
     );
   }

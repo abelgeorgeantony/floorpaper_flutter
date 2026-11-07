@@ -113,25 +113,35 @@ Float64List buildTilingMatrix({
 ///
 /// - `0°` returns [source] unchanged (no allocation — the caller must
 ///   check for reference equality before disposing).
-/// - `90°` / `180°` / `270°` preserve a rectangular output (dimensions
-///   swap for 90° and 270°), so the rotated tile still tiles seamlessly
-///   when the original was seamless.
-/// - Arbitrary angles expand to the rotated bounding box: no pixels are
-///   clipped, but the corners of the expanded rectangle are transparent,
-///   so on-screen you see rotated diamonds on the background color.
-///   The grid itself stays axis-aligned.
+/// - `90°` / `180°` / `270°` are **pure pixel permutations**. No resampling
+///   happens, so we deliberately skip supersampling for these angles and
+///   return a pixel-exact rotation (dimensions swap for 90° and 270°).
+///   The tile still tiles seamlessly when the original was seamless.
+/// - Arbitrary angles (notably **45° and 135°**) expand to the rotated
+///   bounding box. These DO involve resampling, so the rotation is rendered
+///   at [supersample]× the final bbox resolution and then downsampled —
+///   an SSAA-style antialiasing pass that preserves much more of the tile's
+///   fine detail than a single bilinear tap per output pixel would.
 ///
-/// [maxDimension] caps the longest output side (default 4096). For a
-/// typical tile (≤1024 px) it never triggers; it's there to protect
-/// against pathological inputs.
+/// [supersample] is automatically forced back to 1 for right‑angle rotations
+/// and for intermediates that would exceed [maxDimension].
+///
+/// [fillCorners] (only meaningful for non‑90° angles) replaces the
+/// transparent bbox corners with the wrapped source pattern so the rotated
+/// tile is genuinely seamless at the bbox period.
+///
+/// [maxDimension] caps the longest output side (default 4096).
 Future<ui.Image> rotateTileImage(
   ui.Image source,
   int degrees, {
   int maxDimension = 4096,
   bool fillCorners = false,
+  int supersample = 2,
 }) async {
   final normalized = ((degrees % 360) + 360) % 360;
   if (normalized == 0) return source;
+
+  final isRightAngle = normalized % 90 == 0;
 
   final radians = normalized * math.pi / 180.0;
   final cosT = math.cos(radians).abs();
@@ -152,9 +162,27 @@ Future<ui.Image> rotateTileImage(
   final outW = (bboxW * scale).round().clamp(1, 1 << 20);
   final outH = (bboxH * scale).round().clamp(1, 1 << 20);
 
+  // Right angles (90/180/270) are exact pixel permutations. Supersampling
+  // them would force the result through a 2× downsample afterwards, and
+  // that downsample is not a box filter (FilterQuality.high is cubic), so
+  // it visibly blurs the perfectly pixel-aligned 90° image. Skip the
+  // supersample pass entirely for these angles so the rotation stays exact.
+  int ss = isRightAngle ? 1 : (supersample < 1 ? 1 : supersample);
+  if (ss > 1) {
+    final longestOut = outW > outH ? outW : outH;
+    if (longestOut * ss > maxDimension) {
+      ss = (maxDimension / longestOut).floor();
+      if (ss < 1) ss = 1;
+    }
+  }
+  final ssW = outW * ss;
+  final ssH = outH * ss;
+
+  // ---- Pass 1: draw the rotation (at supersampled resolution when ss > 1).
   final recorder = ui.PictureRecorder();
   final canvas = ui.Canvas(recorder);
 
+  if (ss > 1) canvas.scale(ss.toDouble());
   canvas.translate(outW / 2, outH / 2);
   canvas.rotate(normalized * math.pi / 180.0);
   canvas.scale(scale, scale);
@@ -177,7 +205,7 @@ Future<ui.Image> rotateTileImage(
         (outH + srcH) * 2.0,
       ),
       ui.Paint()
-        ..filterQuality = ui.FilterQuality.medium
+        ..filterQuality = ui.FilterQuality.high
         ..shader = ui.ImageShader(
           source,
           ui.TileMode.repeated,
@@ -200,7 +228,7 @@ Future<ui.Image> rotateTileImage(
             0,
             1,
           ]),
-          filterQuality: ui.FilterQuality.medium,
+          filterQuality: ui.FilterQuality.high,
         ),
     );
   } else {
@@ -208,14 +236,33 @@ Future<ui.Image> rotateTileImage(
     canvas.drawImage(
       source,
       ui.Offset(-srcW / 2, -srcH / 2),
-      ui.Paint()..filterQuality = ui.FilterQuality.medium,
+      ui.Paint()..filterQuality = ui.FilterQuality.high,
     );
   }
 
   final picture = recorder.endRecording();
-  final rotated = await picture.toImage(outW, outH);
+  final intermediate = await picture.toImage(ssW, ssH);
   picture.dispose();
-  return rotated;
+
+  if (ss == 1) return intermediate;
+
+  // ---- Pass 2: downsample the supersampled rotation to the bbox size.
+  // This is only reached for non-90° angles, where the extra antialiasing
+  // actually pays off. Right-angle rotations take the early `return` above
+  // and stay pixel-exact.
+  final finalRecorder = ui.PictureRecorder();
+  final finalCanvas = ui.Canvas(finalRecorder);
+  finalCanvas.drawImageRect(
+    intermediate,
+    ui.Rect.fromLTWH(0, 0, ssW.toDouble(), ssH.toDouble()),
+    ui.Rect.fromLTWH(0, 0, outW.toDouble(), outH.toDouble()),
+    ui.Paint()..filterQuality = ui.FilterQuality.high,
+  );
+  final finalPicture = finalRecorder.endRecording();
+  final result = await finalPicture.toImage(outW, outH);
+  finalPicture.dispose();
+  intermediate.dispose();
+  return result;
 }
 
 /// Renders a tiled image.
@@ -274,7 +321,7 @@ Future<ui.Image> renderTiledImage({
       sourceSize: rotatedSourceSize,
       canvasSize: logicalCanvasSize,
       config: config,
-      contentSize: contentSize, // NEW
+      contentSize: contentSize,
     );
 
     final recorder = ui.PictureRecorder();
@@ -294,7 +341,7 @@ Future<ui.Image> renderTiledImage({
           ui.TileMode.repeated,
           ui.TileMode.repeated,
           matrix,
-          filterQuality: ui.FilterQuality.medium,
+          filterQuality: ui.FilterQuality.high,
         ),
     );
 

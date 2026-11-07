@@ -45,6 +45,10 @@ class _TileGridScreenState extends State<TileGridScreen> {
   bool _searchActive = false;
   String _searchQuery = '';
 
+  // Currently visible card in the home/lock carousel (0 = home, 1 = lock).
+  // Tracked so the page-indicator dots can animate on swipe.
+  int _carouselIndex = 0;
+
   @override
   void initState() {
     super.initState();
@@ -245,17 +249,19 @@ class _TileGridScreenState extends State<TileGridScreen> {
     });
   }
 
-  /// Scrolls the circular carousel to the card for [target] (if there is more
-  /// than one card and it isn't already the visible one). Picks the shorter
-  /// direction around the infinite PageView.
+  /// Scrolls the circular carousel to the card for [target] (if it isn't
+  /// already the visible one). Picks the shorter direction around the
+  /// infinite PageView.
+  ///
+  /// Note: both Home and Lock always have a card now (either a current
+  /// wallpaper or a "not set" placeholder), so the carousel is always at
+  /// least two pages — no "single card, nothing to swipe" early return.
   void _focusCarouselOn(WallpaperTarget target) {
     final controller = _carouselController;
     if (controller == null || !controller.hasClients) return;
 
-    final entries = _buildCurrentEntries();
-    if (entries.length < 2) return; // single card — nothing to swipe
-
-    final targetIndex = entries.indexWhere((e) => e.current.target == target);
+    final entries = _buildCarouselEntries();
+    final targetIndex = entries.indexWhere((e) => e.target == target);
     if (targetIndex < 0) return;
 
     final currentPage =
@@ -355,71 +361,116 @@ class _TileGridScreenState extends State<TileGridScreen> {
     return null;
   }
 
-  List<_CurrentEntry> _buildCurrentEntries() {
-    final entries = <_CurrentEntry>[];
-
+  /// Always returns exactly two entries — Home first, then Lock — so the
+  /// carousel can render a "not set" placeholder for whichever target the
+  /// user hasn't configured yet.
+  List<_CarouselEntry> _buildCarouselEntries() {
     final home = _homeWallpaper;
-    if (home != null) {
-      final tile = _findTile(home.tileId);
-      if (tile != null) entries.add(_CurrentEntry(tile: tile, current: home));
-    }
+    final homeTile = home != null ? _findTile(home.tileId) : null;
 
     final lock = _lockWallpaper;
-    if (lock != null) {
-      final tile = _findTile(lock.tileId);
-      if (tile != null) entries.add(_CurrentEntry(tile: tile, current: lock));
-    }
+    final lockTile = lock != null ? _findTile(lock.tileId) : null;
 
-    return entries;
+    return [
+      _CarouselEntry(
+        target: WallpaperTarget.home,
+        tile: homeTile,
+        current: home,
+      ),
+      _CarouselEntry(
+        target: WallpaperTarget.lock,
+        tile: lockTile,
+        current: lock,
+      ),
+    ];
   }
 
-  Widget _buildCurrentCard(_CurrentEntry entry) {
-    return _CurrentWallpaperCard(
-      tile: entry.tile,
-      current: entry.current,
-      imageBuilder: _buildTileImage,
-      onTap: () => _openCurrentWallpaper(entry.tile, entry.current),
-    );
-  }
+  /// Builds whichever card an entry represents: an actual current-wallpaper
+  /// card if a record is loaded, or a "not set" placeholder otherwise.
+  Widget _buildCarouselCard(_CarouselEntry entry) {
+    final tile = entry.tile;
+    final current = entry.current;
 
-  /// Sliver that holds the "current wallpaper" bar(s), or null when neither
-  /// target has a wallpaper recorded. One entry → a plain card; two entries →
-  /// a circular PageView so the user can swipe between home and lock.
-  Widget? _buildCurrentWallpaperSliver() {
-    final entries = _buildCurrentEntries();
-    if (entries.isEmpty) return null;
-
-    if (entries.length == 1) {
-      return SliverPadding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-        sliver: SliverToBoxAdapter(
-          child: SizedBox(
-            height: 120,
-            child: _buildCurrentCard(entries[0]),
-          ),
-        ),
+    if (tile != null && current != null) {
+      return _CurrentWallpaperCard(
+        tile: tile,
+        current: current,
+        imageBuilder: _buildTileImage,
+        onTap: () => _openCurrentWallpaper(tile, current),
       );
     }
 
-    // Two targets: use a PageView.builder with no itemCount. Combined with
-    // `index % entries.length` below this gives a genuinely infinite / circular
-    // carousel in both directions — swiping past the last card wraps to the
-    // first, and vice versa.
+    return _PlaceholderWallpaperCard(
+      target: entry.target,
+      hasTiles: _tiles.isNotEmpty,
+      // When there are no local tiles yet, tapping the placeholder is the
+      // shortest path to the store — same destination as the AppBar's
+      // "download more tiles" button.
+      onTap: _tiles.isEmpty ? _openTileStore : null,
+    );
+  }
+
+  /// The home/lock carousel followed by its page-indicator dots.
+  ///
+  /// This is never null: on a fresh install (no wallpaper set) it shows two
+  /// placeholder cards that prompt the user to choose a tile (if local tiles
+  /// exist) or open the tile store (if they don't).
+  Widget _buildCurrentWallpaperSliver() {
+    final entries = _buildCarouselEntries();
+
     _carouselController ??= PageController(initialPage: 1000);
 
     return SliverPadding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
       sliver: SliverToBoxAdapter(
-        child: SizedBox(
-          height: 120,
-          child: PageView.builder(
-            controller: _carouselController,
-            itemBuilder: (context, index) {
-              return _buildCurrentCard(entries[index % entries.length]);
-            },
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              height: 120,
+              child: PageView.builder(
+                controller: _carouselController,
+                onPageChanged: (index) {
+                  final mod = index % entries.length;
+                  if (mod != _carouselIndex) {
+                    setState(() => _carouselIndex = mod);
+                  }
+                },
+                itemBuilder: (context, index) {
+                  return _buildCarouselCard(entries[index % entries.length]);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            _buildCarouselDots(entries.length),
+          ],
         ),
       ),
+    );
+  }
+
+  /// Animated "current page" dots. The active dot stretches into a pill so it
+  /// reads instantly even on small screens.
+  Widget _buildCarouselDots(int count) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (var i = 0; i < count; i++)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            margin: const EdgeInsets.symmetric(horizontal: 3),
+            width: i == _carouselIndex ? 16 : 6,
+            height: 6,
+            decoration: BoxDecoration(
+              color: i == _carouselIndex
+                  ? scheme.primary
+                  : scheme.onSurfaceVariant.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+      ],
     );
   }
 
@@ -452,65 +503,81 @@ class _TileGridScreenState extends State<TileGridScreen> {
       return _ErrorView(message: _error!, onRetry: _loadInitial);
     }
 
-    if (_tiles.isEmpty) {
-      return _EmptyView(onBrowse: _openTileStore);
-    }
-
-    final currentSliver = _buildCurrentWallpaperSliver();
     final filtered = _filteredTiles;
     final query = _searchQuery.trim();
 
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     final bottomPadding = 16.0 + bottomInset;
 
-    return CustomScrollView(
-      controller: _scrollController,
-      slivers: [
-        _buildSearchSliver(),
-        if (currentSliver != null) currentSliver,
-        if (filtered.isEmpty && query.isNotEmpty)
-          SliverFillRemaining(
-            hasScrollBody: false,
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: Text(
-                  'No tiles match "$query".',
-                  textAlign: TextAlign.center,
+    return RefreshIndicator(
+      onRefresh: _refreshAll,
+      child: CustomScrollView(
+        controller: _scrollController,
+        // Always scrollable so pull-to-refresh works even when the grid
+        // doesn't overflow the viewport.
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          _buildSearchSliver(),
+          // Always present now — on a fresh install this renders the two
+          // "not set" placeholder cards + page dots.
+          _buildCurrentWallpaperSliver(),
+          if (_tiles.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _EmptyView(onBrowse: _openTileStore),
+            )
+          else if (filtered.isEmpty && query.isNotEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Center(
+                  child: Text(
+                    'No tiles match "$query".',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 1.0,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _TileGridItem(
+                    tile: filtered[index],
+                    imageBuilder: _buildTileImage,
+                    onTap: () => _openTilePreview(filtered[index]),
+                  ),
+                  childCount: filtered.length,
                 ),
               ),
             ),
-          )
-        else
-          SliverPadding(
-            padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childAspectRatio: 1.0,
-              ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => _TileGridItem(
-                  tile: filtered[index],
-                  imageBuilder: _buildTileImage,
-                  onTap: () => _openTilePreview(filtered[index]),
-                ),
-                childCount: filtered.length,
-              ),
-            ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-/// Resolved pairing of a saved [CurrentWallpaper] with its loaded [Tile].
-class _CurrentEntry {
-  final Tile tile;
-  final CurrentWallpaper current;
-  const _CurrentEntry({required this.tile, required this.current});
+/// A single slot in the home/lock carousel. Either [tile] and [current] are
+/// both populated (a real current-wallpaper record), or both are null (the
+/// target is unset and a placeholder should render).
+class _CarouselEntry {
+  final WallpaperTarget target;
+  final Tile? tile;
+  final CurrentWallpaper? current;
+
+  const _CarouselEntry({
+    required this.target,
+    this.tile,
+    this.current,
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -669,6 +736,112 @@ class _CurrentWallpaperCard extends StatelessWidget {
     );
   }
 }
+
+
+/// Shown in the home/lock carousel when the corresponding target has no
+/// wallpaper set. Visually mirrors [_CurrentWallpaperCard] so the carousel
+/// feels consistent whether you're looking at a real or unconfigured slot.
+class _PlaceholderWallpaperCard extends StatelessWidget {
+  final WallpaperTarget target;
+  final bool hasTiles;
+  final VoidCallback? onTap;
+
+  const _PlaceholderWallpaperCard({
+    required this.target,
+    required this.hasTiles,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isLock = target == WallpaperTarget.lock;
+
+    final label = isLock ? 'Lock screen wallpaper' : 'Home screen wallpaper';
+    final targetIcon = isLock ? Icons.lock_outline : Icons.wallpaper_outlined;
+
+    // Two flavours of CTA, depending on whether the user can pick a tile
+    // straight away (tiles exist) or first needs to fetch some.
+    final subtitle = hasTiles
+        ? 'Select a tile below to preview'
+        : 'Download tiles to get started';
+
+    // When there are no tiles, the preview block shows a cloud-download
+    // glyph and the whole card becomes the "open the store" button.
+    final previewIcon = hasTiles ? targetIcon : Icons.cloud_download_outlined;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: theme.colorScheme.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          height: 120,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Not set',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 120,
+                child: ColoredBox(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  child: Center(
+                    child: Icon(
+                      previewIcon,
+                      size: 40,
+                      color: theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 class _EmptyView extends StatelessWidget {
   final VoidCallback onBrowse;
